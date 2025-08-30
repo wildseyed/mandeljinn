@@ -390,107 +390,78 @@ Implications:
 Next: Section 19 (timbre bank & engine scaffolding) appended below.
 
 ---
-## 19. Internal Timbre Bank & Engine_Mandeljinn (Audio-Only Phase 1)
-Goal: Provide internal sonic diversity (analog to FMG Program Change churn) without MIDI. Eight distinct low-CPU patches selectable per orbit point (optional) or fixed when patch_change disabled.
+## 19. Canonical Audio Implementation (FMG-Faithful Engine_Mandeljinn)
+Goal: Implement only FMG's canonical audio modes - Direct and Sine - without non-canonical timbre bank. Stay true to FMG's fractal-nature audio generation.
 
-### 19.1 Patch Design Principles
-- Low CPU: Single Synth voice (monophonic continuous) for Direct Mode; Sine Mode already simple. Timbre bank changes avoid re-instantiating Synth; they adjust control-rate parameters.
-- Distinct Spectral Profiles: Cover pure, bright, hollow, noisy, transient-rich, metallic, vocal/formant, and evolving/ring-mod textures.
-- Deterministic: Each patch = fixed param set (no randomness at switch) to ensure reproducibility of orbit timbre sequences.
-- Instant Switching: Patch change applies within <1 orbit tick (control bus set) with gentle 5–10 ms crossfade to prevent clicks.
+### 19.1 Canonical Audio Modes Only
+FMG has exactly two audio synthesis modes, both fractal in nature:
 
-### 19.2 Unified SynthDef Concept
-One SynthDef (orbit_voice) with a patch_index control driving branch-select signal chain:
-Components per patch (enabled via patch_index case):
-1. PureSine: single SinOsc.
-2. BrightSaw: VarSaw + subtle high shelf tilt.
-3. PulseHollow: Pulse (PWM fixed width=0.35) plus mild notch (BRF) to hollow out mids.
-4. NoiseCloud: PinkNoise -> gentle LPF + slow amplitude wobble (internal LFO).
-5. Pluckish: Decay2 * Saw passed through resonant LPF (short envelope shaping). (Amplitude envelope re-triggered on patch change if coming into this patch.)
-6. RingPair: Two detuned sines * amplitude ring (multiplication) -> metallic partials.
-7. SimpleFM: Two-op FM (carrier sine + mod sine) with fixed index & ratio.
-8. FormantAir: Saw -> two BPF formant peaks + subtle noise layer.
+**Direct Mode**: 
+- zx orbit values → Left channel amplitude
+- zy orbit values → Right channel amplitude  
+- Raw fractal orbit becomes direct stereo audio trajectory
+- Interpolation between orbit points creates smooth continuous audio
 
-Signal Path Skeleton:
+**Sine Mode**:
+- zy orbit values → Sine wave frequency
+- zx orbit values → Stereo pan position
+- Single sine oscillator with fractal-controlled frequency and panning
+- Creates melodic/tonal content from fractal mathematics
+
+### 19.2 SuperCollider Engine Design (Minimal & Canonical)
+Engine_Mandeljinn will implement exactly these two modes:
+
 ```
-freq_base (for Sine Mode) OR amplitude pair (for Direct Mode) -> timbre block (selected) -> optional low shelving (compensation) -> Pan2 (pan from zx or derived) -> Out
-```
-Direct Mode: patch block receives amplitude scaling left/right externally; timbre block acts as waveshaper on unity signal per channel (apply after amplitude mapping?). Simpler: For Direct Mode we synthesize stereo in engine (two parallel timbre generators) each scaled by ampL/ampR (cost x2). Since amp arrays small (<=100 updates), acceptable.
-Sine Mode: ignore patch bank (OR allow patch bank to apply waveshaping to sine output; configurable). For Phase 1 Sine Mode uses only PureSine or SimpleFM if user toggles "sine_fm_variant".
+SynthDef(\orbit_direct, { |out, ampL=0, ampR=0, glide=0.01|
+  var sig = [Lag.kr(ampL, glide), Lag.kr(ampR, glide)];
+  Out.ar(out, sig);
+});
 
-### 19.3 Control Interface (Engine Parameters)
-engine.patch(index)              -- 0..7
-engine.mode(value)               -- 0=direct, 1=sine
-engine.ampL(value), ampR(value)  -- Direct Mode continuous
-engine.freq(value)               -- Sine Mode continuous (Hz)
-engine.pan(value)                -- Sine Mode pan (-1..1) if not deriving from zx
-engine.masterAmp(value)          -- Global volume
-engine.glide(value)              -- (optional) smoothing for freq / amp transitions
-engine.patchChangeXfade(ms)      -- Crossfade duration (default 0.01)
-
-### 19.4 Orbit Mapping Adjustments (Audio-Only)
-Per orbit point i:
-If patch_change_enabled: patch_index = floor( scale(zx, zx_min, zx_max, 0, 7) + 0.5 ) clamped 0..7; send engine.patch(patch_index) first.
-Direct Mode: ampL = scale(zx, direct.zx_min, zx_max, -1, 1) * masterAmp ; ampR = scale(zy, direct.zy_min, zy_max, -1, 1) * masterAmp.
-Sine Mode: freq = scale(zy, sine.zy_min, zy_max, freq_min, freq_max); pan = scale(zx, sine.zx_min or reuse melody.zx_min?, zx_max, -1, 1).
-Timing: Maintain fixed tick stride as earlier (sequence_speed & tempo) to preserve FMG rhythmic regularity (even though no MIDI message output), used solely to schedule parameter updates.
-
-### 19.5 Patch Parameter Table (Initial Values)
-| Index | Name         | Core Params |
-|-------|--------------|-------------|
-| 0 | PureSine    | sine only (baseline) |
-| 1 | BrightSaw   | VarSaw, slight high shelf (+3 dB @ 4kHz) |
-| 2 | PulseHollow | Pulse 0.35 width, BRF @ 1.2kHz Q=3 |
-| 3 | NoiseCloud  | PinkNoise -> LPF 2.5kHz; slow LFO (0.1Hz) depth 0.2 amp |
-| 4 | Pluckish    | Saw * Decay2(0.005,0.15) -> LPF 3kHz, resonance 0.4 (envelope retrigger on patch enter) |
-| 5 | RingPair    | Sin(freq) * Sin(freq*1.618) (scaled) |
-| 6 | SimpleFM    | Carrier Sin; Mod Sin ratio 2.0; index 1.2 |
-| 7 | FormantAir  | Saw + Pink 0.05 -> BPF 800Hz Q=5 + BPF 1800Hz Q=5 |
-
-Crossfade: On patch change ramp old block gain down & new block up over patchChangeXfade.
-
-### 19.6 SynthDef Pseudocode Outline
-```
-SynthDef(\orbit_voice, { |out, mode=0, patch=0, ampL=0, ampR=0, freq=220, pan=0, masterAmp=0.5, glide=0.01, xfade=0.01|
-  var sigL, sigR, baseSig, blocks, sel, envSwitch;
-  // Build blocks array (8 variants producing mono signal at unity amplitude)
-  blocks = [
-    SinOsc.ar(freq),
-    VarSaw.ar(freq, 0, 0.5) * 0.8,
-    BRF.ar(Pulse.ar(freq, 0.35), 1200, 0.003) * 0.9,
-    LPF.ar(PinkNoise.ar(0.5 + LFNoise1.kr(0.1)*0.2), 2500),
-    LPF.ar(Decay2.ar(Impulse.kr(0), 0.005, 0.15) * Saw.ar(freq), 3000, 0.4),
-    (SinOsc.ar(freq) * SinOsc.ar(freq*1.618)) * 1.5,
-    SinOsc.ar(freq + SinOsc.ar(freq*2, 0, freq*1.2)),
-    (BPF.ar(Saw.ar(freq), 800, 0.2) + BPF.ar(Saw.ar(freq), 1800, 0.2) + PinkNoise.ar(0.02))
-  ];
-  sel = SelectX.ar(patch, blocks); // patch assumed 0..7 integer; fractional -> interpolate
-  if(mode == 1, { // Sine Mode
-     baseSig = sel; // freq driven externally
-     sigL = Pan2.ar(baseSig, pan).at(0);
-     sigR = Pan2.ar(baseSig, pan).at(1);
-  }, {          // Direct Mode
-     // use ampL/ampR (scaled -1..1) controlling amplitude of single mono timbre? Or dual generation.
-     sigL = sel * Lag.kr(ampL, glide);
-     sigR = sel * Lag.kr(ampR, glide);
-  });
-  Out.ar(out, [sigL, sigR] * masterAmp);
+SynthDef(\orbit_sine, { |out, freq=220, pan=0, amp=0.5, glide=0.01|
+  var sig = SinOsc.ar(Lag.kr(freq, glide), 0, amp);
+  Out.ar(out, Pan2.ar(sig, Lag.kr(pan, glide)));
 });
 ```
-Note: Need additional logic to handle Pluckish trigger envelope on patch enter (store last patch index via LocalIn/LocalOut or control bus). May split Pluckish into self-contained excitation always on patch boundary; acceptable simplification for Phase 1.
 
-### 19.7 Scheduler Integration
-Orbit playback loop drives engine parameter sets at each tick. Provide small debounce: if computed patch index unchanged, skip patch() call. Batch ampL/ampR (Direct) or freq/pan (Sine) updates into a single OSC bundle for jitter minimization.
+Control Parameters:
+- engine.mode(0|1) -- 0=direct, 1=sine  
+- engine.ampL(value), engine.ampR(value) -- Direct mode amplitudes
+- engine.freq(value) -- Sine mode frequency (Hz)
+- engine.pan(value) -- Sine mode pan (-1 to 1)
+- engine.glide(value) -- Smoothing between orbit points (0.001 to 0.1)
 
-### 19.8 Risk / Mitigation (Audio-Only Shift)
-Loss of pitched melodic contour (no note mapping): Accept for Phase 1; rely on timbral rhythm & amplitude/frequency trajectories. Future Phase adds internal poly melodic mode using subset of voices from multi-osc bank.
-CPU spikes from patch crossfade: Keep crossfade <= 10 ms and avoid allocating new UGens per change (pre-built blocks inside single SynthDef). SelectX interpolates; only amplitude weighting cost.
+### 19.3 Orbit Parameter Mapping (Canonical FMG)
+Per orbit point, using FMG's linear scaling:
 
-### 19.9 Next Implementation Steps
-1. Implement Engine_Mandeljinn SC file with SynthDef above + command handlers.
-2. Lua wrapper: params (mode, patch_change_enabled, master_amp, glide, xfade_ms) + orbit playback scheduling code.
-3. Update orbit mapping functions to compute patch index & amplitude/freq values.
-4. Basic profiling (average SC command latency) to ensure <1ms average.
-5. Add test harness script to cycle patches at 100Hz for 1 second verifying absence of clicks.
+**Direct Mode**:
+```lua
+local ampL = scale(orbit[i].zx, params.direct.zx_min, params.direct.zx_max, -1, 1)
+local ampR = scale(orbit[i].zy, params.direct.zy_min, params.direct.zy_max, -1, 1) 
+engine.ampL(ampL)
+engine.ampR(ampR)
+```
+
+**Sine Mode**:
+```lua  
+local freq = scale(orbit[i].zy, params.sine.zy_min, params.sine.zy_max, params.sine.freq_min, params.sine.freq_max)
+local pan = scale(orbit[i].zx, params.sine.zx_min, params.sine.zx_max, -1, 1)
+engine.freq(freq)
+engine.pan(pan)  
+```
+
+### 19.4 Fractal-Nature Audio Generation
+The audio IS the fractal orbit - no additional synthesis layers:
+- Orbit computation using FMG's Z0=C starting convention
+- Direct mode: Raw complex coordinates become stereo field
+- Sine mode: Imaginary axis drives pitch, real axis drives space
+- Interpolation preserves continuous mathematical trajectory
+- Audio becomes direct sonification of fractal iteration dynamics
+
+### 19.5 Implementation Constraints (1020-voice capable)
+- Single continuous voice per mode (not polyphonic)
+- Parameter updates at orbit iteration rate (typically 100 points)
+- Glide/lag for anti-aliasing rapid parameter changes  
+- Buffer size considerations for low-latency parameter streaming
+- Raspberry Pi 3 CPU budget: aim for <10% with 1020 iterations
 
 ---

@@ -1,235 +1,139 @@
--- Mandeljinn v0.2-debug
--- Fractal Music Generator
--- norns implementation
+-- Mandeljinn by Wildseyed
+-- vibin' with Claude
 --
--- E1: Zoom
--- E2: Pan X  
--- E3: Pan Y
--- K1+E1: Select Fractal
--- K2+E1: Set Iterations
--- K2: Add Orbit Origin
--- K3: Remove Last Origin
+-- Deep in the mathematical
+-- realm where infinite
+-- complexity emerges from
+-- simple rules, the Mandeljinn
+-- dwells. Ancient folklore
+-- speaks of genies trapped in
+-- lamps, but this Jinn inhabits
+-- the fractal landscape itself -
+-- a spirit of pure mathematics
+-- that transforms the eternal
+-- dance of complex numbers
+-- into living sound and vision.
 --
--- Based on FMG research
-
-local VERSION = "v0.2-debug-20250829"
+-- As you navigate these
+-- infinite shores, the
+-- Mandeljinn whispers the
+-- secret songs hidden within
+-- each point of the fractal
+-- plane. Every zoom reveals
+-- new mysteries, every orbit
+-- traces melodies that have
+-- waited eons to be heard.
+-- This is where mathematics
+-- becomes music, where
+-- iteration becomes rhythm,
+-- where chaos becomes art.
+--
+-- CONTROLS:
+-- K1: Toggle menu / back
+-- K2: Add current location to
+-- sequence
+-- K3: Delete last sequence
+-- entry
+-- E1: Pan left/right (hold K2:
+-- zoom out/in)
+-- E2: Pan up/down (hold K2:
+-- change fractal)
+-- E3: Zoom in/out (hold K3:
+-- palette cycling)
+--
+-- HOLD COMBINATIONS:
+-- K2 + E1: Zoom out/in
+-- K2 + E2: Change fractal type
+-- K3 + E3: Cycle color palette
+-- K2 + K3 (long press): Reset
+-- view to default
+--
+-- github.com/wildseyed/mandeljinn
 
 local util = require 'util'
-local tab = require 'tabutil'
-local mu = require 'musicutil'
-
-engine.name = 'PolyPerc'
 
 -- Screen dimensions
 local SCREEN_W = 128
 local SCREEN_H = 64
 
--- Fractal definitions matching FMG
+-- Fractal definitions
 local fractals = {
   {id = 0, name = "Mandelbrot", short = "MAND"},
   {id = 1, name = "Burning Ship", short = "BURN"},
-  {id = 2, name = "Tricorn", short = "TRIC"}, 
-  {id = 3, name = "Rectangle", short = "RECT"},
-  {id = 4, name = "Klingon", short = "KLIN"},
-  {id = 5, name = "Crown", short = "CROW"},
-  {id = 6, name = "Frog", short = "FROG"},
-  {id = 7, name = "Mandelship", short = "MSHP"},
-  {id = 8, name = "Frankenstein", short = "FRNK"},
-  {id = 9, name = "Logistic", short = "LOGI"}
+  {id = 2, name = "Tricorn", short = "TRIC"}
 }
 
 -- State variables
-local fractal_index = 1 -- Start with Mandelbrot
+local fractal_index = 1
 local center_x = -0.5
 local center_y = 0.0
 local zoom = 1.0
 local max_iterations = 100
 
--- Safe bounds to prevent numerical issues
-local MAX_PAN_X = 3.5  -- Horizontal pan limit (wider range)
-local MAX_PAN_Y = 2.8  -- Vertical pan limit (narrower range)
-local MAX_ZOOM = 1e12 -- Maximum zoom before precision breaks
-local MIN_ZOOM = 0.1  -- Minimum zoom to prevent getting lost
-
 -- UI state
 local screen_dirty = true
-local fractal_select_mode = false
-local iteration_select_mode = false
 local hud_timeout = 0
 local hud_text = ""
 
--- Encoder debouncing to prevent queue buildup
-local encoder_timer = nil
-local pending_render = false
-
--- Boolean encoder state tracking (digital, not analog)
-local encoder_turning_cw = {false, false, false}   -- Is encoder turning clockwise?
-local encoder_turning_ccw = {false, false, false}  -- Is encoder turning counter-clockwise?
-local encoder_idle_time = {0, 0, 0}                -- Time since last encoder activity
-local encoder_timeout = 0.1                        -- Consider encoder stopped after 100ms of no activity
-
--- Movement processing state
-local movement_in_progress = false                  -- Are we in move->render->wait cycle?
-
--- Background rendering state  
+-- Rendering state
 local render_in_progress = false
 local render_row = 1
-local render_timer = nil
-local pixels_per_frame = 4 -- Render 4 rows per frame for smooth updates
-local render_generation = 0 -- Track render requests to prevent race conditions
-
--- Orbit origins list
-local orbit_origins = {}
-
--- Rendering
-local pixel_buffer = {}
+local rows_per_frame = 8
 local render_needed = true
 
-function init()
-  print("=== MANDELJINN " .. VERSION .. " STARTING ===")
-  
-  -- Initialize pixel buffer
+-- Pixel buffer
+local pixel_buffer = {}
+
+-- Encoder state
+local encoder_dir = {0, 0, 0}
+local encoder_last_time = {0, 0, 0}
+local encoder_timeout = 0.1
+
+-- Key state for hold detection
+local k2_press_time = 0
+local k3_press_time = 0
+local k2_still_down = false
+local k3_still_down = false
+local HOLD_THRESHOLD = 0.5
+
+-- Sequence management
+local sequence_list = {}
+local global_tempo = 120
+local loop_length = 4
+
+-- Palette system
+local palette_index = 1
+local palettes = {
+  {name="linear", fn=function(r) return r end},
+  {name="gamma√", fn=function(r) return math.sqrt(r) end},
+  {name="gamma¼", fn=function(r) return r^(0.25) end},
+  {name="cosine", fn=function(r) return 0.5 - 0.5*math.cos(r*math.pi) end},
+  {name="edge", fn=function(r) return (r < 0.85) and (r*0.6) or (0.6 + (r-0.85)/0.15*0.4) end},
+  {name="smooth", fn="dither"},
+}
+
+-- 4x4 Bayer matrix for dithering
+local bayer4 = {
+  { 0,  8,  2, 10},
+  {12,  4, 14,  6},
+  { 3, 11,  1,  9},
+  {15,  7, 13,  5},
+}
+
+-- Initialize pixel buffer
+function init_buffer()
   for y = 1, SCREEN_H do
     pixel_buffer[y] = {}
     for x = 1, SCREEN_W do
       pixel_buffer[y][x] = 0
     end
   end
-  
-  -- Initial render
-  render_fractal()
-  
-  -- Screen refresh timer
-  local screen_timer = metro.init()
-  screen_timer.time = 1/15 -- 15 fps
-  screen_timer.event = function()
-    if screen_dirty then
-      redraw()
-    end
-    -- Update HUD timeout
-    if hud_timeout > 0 then
-      hud_timeout = hud_timeout - 1
-      screen_dirty = true
-    end
-  end
-  screen_timer:start()
-end
-
--- FMG-style fractal iteration functions
--- Note: Using Z0 = C convention from FMG (not classic Z0 = 0)
-function iterate_fractal(cx, cy, fractal_id, max_iter)
-  -- Numerical safety checks
-  if math.abs(cx) > 100 or math.abs(cy) > 100 then
-    return 0 -- Outside reasonable bounds
-  end
-  
-  local zx, zy = cx, cy  -- Z0 = C (FMG convention)
-  local iterations = 0
-  
-  for i = 1, max_iter do
-    local zx2 = zx * zx
-    local zy2 = zy * zy
-    local magnitude_squared = zx2 + zy2
-    
-    -- Bailout test (|Z|^2 >= 4)
-    if magnitude_squared >= 4.0 then
-      return iterations
-    end
-    
-    -- Numerical safety - prevent overflow
-    if magnitude_squared > 1e10 or zx ~= zx or zy ~= zy then
-      return iterations -- NaN or overflow detected
-    end
-    
-    -- Apply fractal formula
-    if fractal_id == 0 then -- Mandelbrot
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = 2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-      
-    elseif fractal_id == 1 then -- Burning Ship
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = math.abs(2 * zx * zy) + cy
-      zx, zy = new_zx, new_zy
-      
-    elseif fractal_id == 2 then -- Tricorn
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = -2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-      
-    elseif fractal_id == 3 then -- Rectangle (simplified)
-      local mod_z2 = zx2 + zy2
-      local new_zx = zx * mod_z2 - zx * cx * cx + cx
-      local new_zy = zy * mod_z2 - zy * cy * cy + cy
-      zx, zy = new_zx, new_zy
-      
-    elseif fractal_id == 4 then -- Klingon
-      local new_zx = math.abs(zx * zx2) - 3 * zy2 * math.abs(zx) + cx
-      local new_zy = 3 * zx2 * math.abs(zy) - math.abs(zy * zy2) + cy
-      zx, zy = new_zx, new_zy
-      
-    elseif fractal_id == 5 then -- Crown
-      local new_zx = zx * zx2 - 3 * zx * zy2 + cx
-      local new_zy = math.abs(3 * zx2 * zy - zy * zy2) + cy
-      zx, zy = new_zx, new_zy
-      
-    else -- Default to Mandelbrot for unimplemented
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = 2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-    end
-    
-    iterations = iterations + 1
-  end
-  
-  return max_iter -- Interior point
-end
-
--- Compute orbit for audio (FMG-style)
-function compute_orbit(cx, cy, fractal_id, max_iter)
-  local orbit = {}
-  local zx, zy = cx, cy  -- Z0 = C (FMG convention)
-  
-  table.insert(orbit, {zx = zx, zy = zy})
-  
-  for i = 1, max_iter do
-    local zx2 = zx * zx
-    local zy2 = zy * zy
-    
-    -- Bailout test
-    if zx2 + zy2 >= 4.0 then
-      break
-    end
-    
-    -- Apply same iteration as above (could refactor)
-    if fractal_id == 0 then -- Mandelbrot
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = 2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-    elseif fractal_id == 1 then -- Burning Ship
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = math.abs(2 * zx * zy) + cy
-      zx, zy = new_zx, new_zy
-    elseif fractal_id == 2 then -- Tricorn
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = -2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-    else -- Default Mandelbrot
-      local new_zx = zx2 - zy2 + cx
-      local new_zy = 2 * zx * zy + cy
-      zx, zy = new_zx, new_zy
-    end
-    
-    table.insert(orbit, {zx = zx, zy = zy})
-  end
-  
-  return orbit
 end
 
 -- Convert screen coordinates to complex plane
 function screen_to_complex(screen_x, screen_y)
   local aspect = SCREEN_W / SCREEN_H
-  local scale = 4.0 / zoom -- Base scale covers roughly -2 to +2
+  local scale = 4.0 / zoom
   
   local cx = center_x + (screen_x - SCREEN_W/2) * scale / SCREEN_W * aspect
   local cy = center_y + (screen_y - SCREEN_H/2) * scale / SCREEN_H
@@ -237,411 +141,329 @@ function screen_to_complex(screen_x, screen_y)
   return cx, cy
 end
 
--- Convert complex plane to screen coordinates  
-function complex_to_screen(cx, cy)
-  local aspect = SCREEN_W / SCREEN_H
-  local scale = 4.0 / zoom
+-- Fractal iteration
+function iterate_fractal(cx, cy, fractal_id, max_iter)
+  if math.abs(cx) > 100 or math.abs(cy) > 100 then return 0 end
   
-  local screen_x = (cx - center_x) * SCREEN_W / (scale * aspect) + SCREEN_W/2
-  local screen_y = (cy - center_y) * SCREEN_H / scale + SCREEN_H/2
+  local zx, zy = cx, cy
+  local iterations = 0
   
-  return math.floor(screen_x + 0.5), math.floor(screen_y + 0.5)
-end
-
--- Render fractal incrementally in background
-function render_fractal()
-  print("RENDER_FRACTAL called, render_needed=" .. tostring(render_needed))
-  if not render_needed then 
-    print("RENDER_FRACTAL: early exit, not needed")
-    return 
-  end
-  
-  -- Increment generation to invalidate any pending renders
-  render_generation = render_generation + 1
-  local current_generation = render_generation
-  print("RENDER_FRACTAL: generation=" .. current_generation)
-  
-  -- Stop any existing render timer
-  if render_timer then
-    print("RENDER_FRACTAL: stopping existing timer")
-    render_timer:stop()
-    render_timer = nil
-  end
-  
-  -- Mark as not needed to prevent recursive calls
-  render_needed = false
-  
-  -- Start background rendering
-  render_in_progress = true
-  render_row = 1
-  print("RENDER_FRACTAL: starting background render")
-  
-  -- Try to start render timer for incremental updates
-  render_timer = metro.init()
-  
-  -- Check if metro allocation succeeded
-  if render_timer == nil then
-    print("ERROR: render metro.init() failed - fallback to immediate render")
-    -- Fallback: render everything immediately (blocking but safe)
-    print("IMMEDIATE RENDER: starting full render")
-    for y = 1, SCREEN_H do
-      for x = 1, SCREEN_W do
-        local cx, cy = screen_to_complex(x-1, y-1)
-        local iterations = iterate_fractal(cx, cy, fractals[fractal_index].id, max_iterations)
-        if iterations >= max_iterations then
-          pixel_buffer[y][x] = 0
-        else
-          pixel_buffer[y][x] = math.min(15, math.floor(iterations * 15 / max_iterations) + 1)
-        end
-      end
-      -- Update screen every 8 rows to prevent queue overflow
-      if y % 8 == 0 then
-        screen_dirty = true
-      end
-    end
-    render_in_progress = false
-    screen_dirty = true -- Final screen update
-    print("IMMEDIATE RENDER: completed")
+  for i = 1, max_iter do
+    local zx2 = zx * zx
+    local zy2 = zy * zy
+    local mag2 = zx2 + zy2
     
-    -- Resume movement cycle if it was in progress
-    if movement_in_progress then
-      movement_in_progress = false
-      print("MOVEMENT: render complete, checking for more movement")
-      start_movement_cycle()
+    if mag2 >= 4.0 then return iterations end
+    if mag2 > 1e10 then return iterations end
+    
+    if fractal_id == 0 then -- Mandelbrot
+      local nzx = zx2 - zy2 + cx
+      local nzy = 2 * zx * zy + cy
+      zx, zy = nzx, nzy
+    elseif fractal_id == 1 then -- Burning Ship
+      local nzx = zx2 - zy2 + cx
+      local nzy = math.abs(2 * zx * zy) + cy
+      zx, zy = nzx, nzy
+    elseif fractal_id == 2 then -- Tricorn
+      local nzx = zx2 - zy2 + cx
+      local nzy = -2 * zx * zy + cy
+      zx, zy = nzx, nzy
+    else -- Default Mandelbrot
+      local nzx = zx2 - zy2 + cx
+      local nzy = 2 * zx * zy + cy
+      zx, zy = nzx, nzy
     end
     
-    return
+    iterations = iterations + 1
   end
   
-  render_timer.time = 1/60 -- 60fps for smooth incremental rendering
-  render_timer.event = function()
-    render_incremental(current_generation)
-  end
-  render_timer:start()
+  return max_iter
 end
 
--- Render a few rows at a time to prevent blocking
-function render_incremental(generation)
-  -- Check if this render has been superseded
-  if generation ~= render_generation then
-    print("RENDER_INCREMENTAL: generation mismatch, aborting " .. generation .. " vs " .. render_generation)
-    if render_timer then
-      render_timer:stop()
-      render_timer = nil
+-- Map iterations to screen level with palette support
+function map_iterations(iterations, max_iter)
+  if iterations >= max_iter then return 0 end
+  
+  local r = iterations / max_iter
+  local current_palette = palettes[palette_index]
+  
+  if current_palette.fn == "dither" then
+    -- Smooth coloring with Bayer dithering - simplified for compatibility
+    local level_base = math.floor(r * 14) + 1
+    local level_next = math.min(level_base + 1, 15)
+    local fraction = (r * 14) % 1
+    
+    -- Use a simple threshold for dithering
+    if fraction > 0.5 then
+      return level_next
+    else
+      return level_base
     end
-    return
+  else
+    -- Apply palette function
+    r = current_palette.fn(r)
+    local level = 1 + math.floor(r * 14)
+    return math.min(level, 15)
   end
-  
-  if not render_in_progress then
-    print("RENDER_INCREMENTAL: not in progress, stopping")
-    if render_timer then
-      render_timer:stop()
-      render_timer = nil
-    end
-    return
+end
+
+-- Start render if needed
+function start_render_if_needed()
+  if render_needed and not render_in_progress then
+    render_row = 1
+    render_in_progress = true
+    render_needed = false
   end
+end
+
+-- Step render
+function step_render()
+  if not render_in_progress then return end
   
-  print("RENDER_INCREMENTAL: rendering rows " .. render_row .. " to " .. math.min(render_row + pixels_per_frame - 1, SCREEN_H))
-  
-  -- Render a chunk of rows
-  local end_row = math.min(render_row + pixels_per_frame - 1, SCREEN_H)
+  local end_row = math.min(render_row + rows_per_frame - 1, SCREEN_H)
   
   for y = render_row, end_row do
-    -- Double-check generation before expensive computation
-    if generation ~= render_generation then
-      print("RENDER_INCREMENTAL: generation changed mid-render, aborting")
-      return
-    end
-    
     for x = 1, SCREEN_W do
-      local cx, cy = screen_to_complex(x-1, y-1) -- Convert to 0-based
+      local cx, cy = screen_to_complex(x-1, y-1)
       local iterations = iterate_fractal(cx, cy, fractals[fractal_index].id, max_iterations)
-      
-      -- Simple grayscale mapping
-      if iterations >= max_iterations then
-        pixel_buffer[y][x] = 0 -- Interior = black
-      else
-        pixel_buffer[y][x] = math.min(15, math.floor(iterations * 15 / max_iterations) + 1)
-      end
+      pixel_buffer[y][x] = map_iterations(iterations, max_iterations)
     end
   end
   
-  -- Update screen as we go for progressive rendering
+  render_row = end_row + 1
   screen_dirty = true
   
-  -- Move to next chunk
-  render_row = end_row + 1
-  
-  -- Check if complete
   if render_row > SCREEN_H then
-    print("RENDER_INCREMENTAL: completed generation " .. generation)
     render_in_progress = false
-    if render_timer then
-      render_timer:stop()
-      render_timer = nil
-    end
-    
-    -- Resume movement cycle if it was in progress
-    if movement_in_progress then
-      movement_in_progress = false
-      print("MOVEMENT: render complete, checking for more movement")
-      start_movement_cycle()
+  end
+end
+
+-- Update encoder timeouts
+function update_encoder_timeouts()
+  local now = util.time()
+  for i = 1, 3 do
+    if now - encoder_last_time[i] > encoder_timeout then
+      encoder_dir[i] = 0
     end
   end
 end
 
--- Display HUD message
+-- Show HUD message
 function show_hud(text, timeout)
   hud_text = text
-  hud_timeout = timeout or 30 -- ~2 seconds at 15fps
-  screen_dirty = true
+  hud_timeout = timeout or 30
 end
 
--- Debounced render to prevent encoder queue buildup
-function schedule_render()
-  print("SCHEDULE_RENDER called [" .. VERSION .. "]")
-  
-  -- Stop any current rendering immediately
-  render_generation = render_generation + 1
-  print("RENDER_GENERATION incremented to: " .. render_generation)
-  
-  if render_in_progress then
-    print("STOPPING current render in progress")
-    render_in_progress = false
-    if render_timer then
-      render_timer:stop()
-      render_timer = nil
-    end
-  end
-  
-  -- Cancel existing encoder timer
-  if encoder_timer then
-    print("STOPPING existing encoder timer")
-    encoder_timer:stop()
-    encoder_timer = nil
-  end
-  
-  -- Try to create new timer for debouncing
-  print("STARTING new encoder timer")
-  encoder_timer = metro.init()
-  
-  -- Check if metro allocation succeeded
-  if encoder_timer == nil then
-    print("ERROR: metro.init() failed - rendering immediately without debounce")
-    -- Immediate render without debouncing - no metro needed
-    render_needed = true
-    render_fractal()
-    return
-  end
-  
-  -- Metro available - use debounced approach
-  pending_render = true
-  encoder_timer.time = 0.05 -- 50ms delay
-  encoder_timer.count = 1
-  encoder_timer.event = function()
-    print("ENCODER TIMER triggered")
-    if pending_render then
-      render_needed = true
-      pending_render = false
-      print("CALLING render_fractal()")
-      render_fractal() -- Start background rendering
-    end
-  end
-  encoder_timer:start()
+-- Sequence management functions
+function add_current_state_to_sequence()
+  local state = {
+    fractal_index = fractal_index,
+    center_x = center_x,
+    center_y = center_y,
+    zoom = zoom,
+    max_iterations = max_iterations,
+    palette_index = palette_index,
+    timestamp = util.time()
+  }
+  table.insert(sequence_list, state)
+  return #sequence_list
 end
 
--- Encoder boolean state tracking - digital not analog
-function enc(n, delta)
-  local current_time = util.time()
-  
-  -- Update boolean direction state based on delta (ignore magnitude)
-  if delta > 0 then
-    encoder_turning_cw[n] = true
-    encoder_turning_ccw[n] = false
-  else
-    encoder_turning_cw[n] = false
-    encoder_turning_ccw[n] = true
+function delete_last_sequence_entry()
+  if #sequence_list > 0 then
+    table.remove(sequence_list, #sequence_list)
+    return true
   end
-  
-  encoder_idle_time[n] = current_time
-  
-  -- Start movement processing if not already in progress
-  if not movement_in_progress and not render_in_progress then
-    start_movement_cycle()
-  end
+  return false
 end
 
--- Process one movement cycle: move -> render -> wait -> check again
-function start_movement_cycle()
-  if movement_in_progress or render_in_progress then
-    return  -- Already processing
-  end
+-- Apply encoder movement
+function apply_encoder_movement()
+  update_encoder_timeouts()
+  local changed = false
   
-  movement_in_progress = true
-  process_one_movement()
-end
-
-function process_one_movement()
-  local current_time = util.time()
-  local moved = false
-  
-  -- Check for encoder timeouts (consider stopped if no activity for timeout period)
-  for i = 1, 3 do
-    if current_time - encoder_idle_time[i] > encoder_timeout then
-      encoder_turning_cw[i] = false
-      encoder_turning_ccw[i] = false
-    end
-  end
-  
-  -- Check if any encoder is currently turning
-  local any_encoder_active = false
-  for i = 1, 3 do
-    if encoder_turning_cw[i] or encoder_turning_ccw[i] then
-      any_encoder_active = true
-      break
-    end
-  end
-  
-  -- If no encoders active, stop movement cycle
-  if not any_encoder_active then
-    movement_in_progress = false
-    print("MOVEMENT: stopped - no active encoders")
-    return
-  end
-  
-  -- Process encoder 1 (zoom or special modes)
-  if fractal_select_mode and (encoder_turning_cw[1] or encoder_turning_ccw[1]) then
-    local direction = encoder_turning_cw[1] and 1 or -1
-    fractal_index = util.clamp(fractal_index + direction, 1, #fractals)
-    render_needed = true
-    print("FRACTAL CHANGE: " .. fractals[fractal_index].name)
-    show_hud("FRACTAL: " .. fractals[fractal_index].name)
-    moved = true
-    
-  elseif iteration_select_mode and (encoder_turning_cw[1] or encoder_turning_ccw[1]) then
-    local direction = encoder_turning_cw[1] and 1 or -1
-    local iteration_step = direction * 10
-    max_iterations = util.clamp(max_iterations + iteration_step, 10, 500)
-    render_needed = true
-    print("ITERATION CHANGE: " .. max_iterations)
-    show_hud("ITERATIONS: " .. max_iterations)
-    moved = true
-    
-  elseif encoder_turning_cw[1] or encoder_turning_ccw[1] then
-    -- Zoom - one increment per cycle
-    local zoom_step = 1.02  -- 2% zoom step
-    if encoder_turning_cw[1] then
-      zoom = zoom * zoom_step
-    else
-      zoom = zoom / zoom_step
-    end
-    zoom = util.clamp(zoom, MIN_ZOOM, MAX_ZOOM)
-    print("ZOOM: " .. zoom .. " (one increment)")
+  -- Zoom (E1)
+  if encoder_dir[1] ~= 0 then
+    local scale = 4.0 / zoom
+    local pixel_scale = scale / SCREEN_W
+    scale = scale - encoder_dir[1] * (pixel_scale * 4)
+    zoom = util.clamp(4.0 / scale, 0.1, 1e12)
     show_hud(string.format("ZOOM: %.2fx", zoom))
-    moved = true
+    changed = true
+    encoder_dir[1] = 0
   end
   
-  -- Process encoder 2 (pan X)
-  if encoder_turning_cw[2] or encoder_turning_ccw[2] then
-    local direction = encoder_turning_cw[2] and 1 or -1
-    local pixel_step = 1.0 / zoom  -- Exactly one pixel at current zoom
-    center_x = center_x + (-direction) * pixel_step  -- Reversed direction
-    center_x = util.clamp(center_x, -MAX_PAN_X, MAX_PAN_X)
-    print("PAN X: " .. center_x .. " (one pixel)")
+  -- Pan X (E2)
+  if encoder_dir[2] ~= 0 then
+    local aspect = SCREEN_W / SCREEN_H
+    local scale = 4.0 / zoom
+    local pixel_step_x = scale / SCREEN_W * aspect
+    center_x = util.clamp(center_x - encoder_dir[2] * pixel_step_x, -3.5, 3.5)
     show_hud(string.format("PAN X: %.3f", center_x))
-    moved = true
+    changed = true
+    encoder_dir[2] = 0
   end
   
-  -- Process encoder 3 (pan Y)
-  if encoder_turning_cw[3] or encoder_turning_ccw[3] then
-    local direction = encoder_turning_cw[3] and 1 or -1
-    local pixel_step = 1.0 / zoom  -- Exactly one pixel at current zoom
-    center_y = center_y + direction * pixel_step
-    center_y = util.clamp(center_y, -MAX_PAN_Y, MAX_PAN_Y)
-    print("PAN Y: " .. center_y .. " (one pixel)")
+  -- Pan Y (E3)
+  if encoder_dir[3] ~= 0 then
+    local scale = 4.0 / zoom
+    local pixel_step_y = scale / SCREEN_H
+    center_y = util.clamp(center_y + encoder_dir[3] * pixel_step_y, -2.8, 2.8)
     show_hud(string.format("PAN Y: %.3f", center_y))
-    moved = true
+    changed = true
+    encoder_dir[3] = 0
   end
   
-  -- If we moved, start render and WAIT for completion
-  if moved then
-    print("MOVEMENT: moved, starting render and waiting...")
-    schedule_render()
-    screen_dirty = true
-    -- movement_in_progress stays true - will be cleared when render completes
-  else
-    -- No movement needed, continue cycle
-    movement_in_progress = false
-    -- Check again after a short delay
-    local continue_timer = metro.init()
-    if continue_timer then
-      continue_timer.time = 0.05  -- 50ms delay
-      continue_timer.event = function()
-        continue_timer:stop()
-        start_movement_cycle()
-      end
-      continue_timer:start()
-    end
+  if changed then
+    render_needed = true
   end
 end
 
--- Key handling
-function key(n, z)
-  print("KEY: n=" .. n .. " z=" .. z .. " [" .. VERSION .. "]")
+-- Main init function
+function init()
+  print("Mandeljinn starting...")
   
-  if n == 1 then
-    if z == 1 then
-      fractal_select_mode = true
-      iteration_select_mode = false
-      print("KEY: entering fractal select mode")
-      show_hud("SELECT FRACTAL (E1)")
-    else
-      fractal_select_mode = false
-      print("KEY: exiting fractal select mode")
-      show_hud("")
+  init_buffer()
+  render_needed = true
+  
+  -- Initial render
+  start_render_if_needed()
+  step_render()
+  
+  -- Start main timer
+  local main_timer = metro.init()
+  main_timer.time = 1/15
+  main_timer.event = function()
+    apply_encoder_movement()
+    
+    if hud_timeout > 0 then
+      hud_timeout = hud_timeout - 1
+      screen_dirty = true
     end
     
-  elseif n == 2 then
-    if z == 1 then
-      print("KEY: K2 pressed, fractal_mode=" .. tostring(fractal_select_mode))
-      -- Check if not in other modes - toggle iteration mode
-      if not fractal_select_mode then
-        iteration_select_mode = not iteration_select_mode
-        print("KEY: iteration_mode=" .. tostring(iteration_select_mode))
-        if iteration_select_mode then
-          show_hud("SET ITERATIONS (E1)")
+    start_render_if_needed()
+    step_render()
+    
+    if screen_dirty then
+      redraw()
+    end
+  end
+  main_timer:start()
+  
+  print("Mandeljinn ready")
+end
+
+-- Encoder handler
+function enc(n, delta)
+  if delta == 0 then return end
+  
+  local dir = (delta > 0) and 1 or -1
+  local now = util.time()
+  
+  -- Simple rate limiting
+  if (now - encoder_last_time[n]) < 0.05 then
+    return
+  end
+  
+  -- Check hold modifiers
+  local k2_held = k2_still_down and (now - k2_press_time) > HOLD_THRESHOLD
+  local k3_held = k3_still_down and (now - k3_press_time) > HOLD_THRESHOLD
+  
+  -- K2 Hold + Encoder combinations (immediate actions)
+  if k2_held then
+    if n == 1 then
+      -- K2 Hold + E1: Fractal selection (immediate)
+      fractal_index = fractal_index + dir
+      if fractal_index < 1 then fractal_index = #fractals end
+      if fractal_index > #fractals then fractal_index = 1 end
+      show_hud("FRACTAL: " .. fractals[fractal_index].name)
+      render_needed = true
+    elseif n == 3 then
+      -- K2 Hold + E3: Iteration selection (immediate)
+      -- Single digit increments with hard limits (8 min, 2000 max for now)
+      local new_iterations = max_iterations + dir
+      new_iterations = util.clamp(new_iterations, 8, 2000)
+      
+      if new_iterations ~= max_iterations then
+        max_iterations = new_iterations
+        show_hud("ITERATIONS: " .. max_iterations)
+        render_needed = true
+      end
+    end
+    encoder_last_time[n] = now
+    return
+  end
+  
+  -- K3 Hold + Encoder combinations (immediate actions)
+  if k3_held then
+    if n == 1 then
+      -- K3 Hold + E1: Tempo control (immediate)
+      global_tempo = util.clamp(global_tempo + dir * 5, 20, 300)
+      show_hud("TEMPO: " .. global_tempo .. " BPM")
+    elseif n == 2 then
+      -- K3 Hold + E2: Loop length control (immediate)
+      loop_length = util.clamp(loop_length + dir, 1, 32)
+      show_hud("LOOP LENGTH: " .. loop_length)
+    elseif n == 3 then
+      -- K3 Hold + E3: Palette cycling (immediate)
+      palette_index = (palette_index % #palettes) + 1
+      show_hud("PALETTE: " .. palettes[palette_index].name)
+      render_needed = true
+    end
+    encoder_last_time[n] = now
+    return
+  end
+  
+  -- Base navigation (accumulates for smooth movement)
+  encoder_dir[n] = dir
+  encoder_last_time[n] = now
+end
+
+-- Key handler
+function key(n, z)
+  local now = util.time()
+  
+  if z == 1 then  -- Key press
+    if n == 1 then
+      -- K1: Toggle to norns menu (original spec)
+      norns.menu.init()
+    elseif n == 2 then
+      k2_press_time = now
+      k2_still_down = true
+    elseif n == 3 then
+      k3_press_time = now
+      k3_still_down = true
+    end
+  else  -- Key release
+    if n == 2 then
+      k2_still_down = false
+      local hold_duration = now - k2_press_time
+      if hold_duration < HOLD_THRESHOLD then
+        -- K2 short press: Add current state to sequence (original spec)
+        local count = add_current_state_to_sequence()
+        show_hud("ADDED TO SEQUENCE (" .. count .. ")")
+      end
+    elseif n == 3 then
+      k3_still_down = false
+      local hold_duration = now - k3_press_time
+      
+      -- Check for K2+K3 combination (both keys held together)
+      if k2_still_down and hold_duration >= HOLD_THRESHOLD then
+        -- K2+K3 long press: Reset view
+        center_x = -0.5
+        center_y = 0.0
+        zoom = 1.0
+        fractal_index = 1
+        show_hud("VIEW RESET")
+        render_needed = true
+      elseif hold_duration < HOLD_THRESHOLD then
+        -- K3 short press: Delete from sequence (original spec)
+        if delete_last_sequence_entry() then
+          show_hud("DELETED FROM SEQUENCE (" .. #sequence_list .. ")")
         else
-          -- Add orbit origin when exiting iteration mode
-          print("KEY: adding orbit origin")
-          local orbit = compute_orbit(center_x, center_y, fractals[fractal_index].id, max_iterations)
-          table.insert(orbit_origins, {
-            cx = center_x,
-            cy = center_y, 
-            fractal_id = fractals[fractal_index].id,
-            orbit = orbit,
-            label = string.format("%s_%d", fractals[fractal_index].short, #orbit_origins + 1)
-          })
-          show_hud(string.format("ADDED ORIGIN %d (%d pts)", #orbit_origins, #orbit))
+          show_hud("SEQUENCE EMPTY")
         end
       end
-    else
-      print("KEY: K2 released")
-      -- Key release - exit iteration mode but don't add origin on release
-      if iteration_select_mode then
-        iteration_select_mode = false
-        print("KEY: exiting iteration mode on release")
-        show_hud("")
-      end
-    end
-    
-  elseif n == 3 and z == 1 then
-    print("KEY: K3 pressed - removing origin")
-    -- Remove last origin
-    if #orbit_origins > 0 then
-      table.remove(orbit_origins)
-      show_hud(string.format("REMOVED (now %d origins)", #orbit_origins))
-    else
-      show_hud("NO ORIGINS TO REMOVE")
     end
   end
 end
@@ -650,40 +472,16 @@ end
 function redraw()
   screen.clear()
   
-  -- Render fractal if needed
-  render_fractal()
-  
   -- Draw fractal
   for y = 1, SCREEN_H do
     for x = 1, SCREEN_W do
       local level = pixel_buffer[y][x]
       if level > 0 then
         screen.level(level)
-        screen.pixel(x-1, y-1)
+        screen.rect(x-1, y-1, 1, 1)
         screen.fill()
       end
     end
-  end
-  
-  -- Draw orbit origins
-  screen.level(15)
-  for i, origin in ipairs(orbit_origins) do
-    local sx, sy = complex_to_screen(origin.cx, origin.cy)
-    if sx >= 0 and sx < SCREEN_W and sy >= 0 and sy < SCREEN_H then
-      screen.circle(sx, sy, 2)
-      screen.fill()
-    end
-  end
-  
-  -- Draw crosshair at center
-  screen.level(8)
-  local cx_screen, cy_screen = complex_to_screen(center_x, center_y)
-  if cx_screen >= 0 and cx_screen < SCREEN_W and cy_screen >= 0 and cy_screen < SCREEN_H then
-    screen.move(cx_screen - 3, cy_screen)
-    screen.line(cx_screen + 3, cy_screen)
-    screen.move(cx_screen, cy_screen - 3)
-    screen.line(cx_screen, cy_screen + 3)
-    screen.stroke()
   end
   
   -- Draw HUD
@@ -696,34 +494,18 @@ function redraw()
   -- Status line
   screen.level(4)
   screen.move(2, SCREEN_H - 2)
-  screen.text(string.format("%s | %.1fx | %d origins", 
-    fractals[fractal_index].short, zoom, #orbit_origins))
+  local progress = ""
+  if render_in_progress then
+    local pct = math.floor((render_row-1)/SCREEN_H*100)
+    progress = string.format(" R%02d%%", pct)
+  end
+  screen.text(string.format("%s | %.1fx%s", 
+    fractals[fractal_index].short, zoom, progress))
   
   screen.update()
   screen_dirty = false
 end
 
--- Cleanup
 function cleanup()
-  -- Stop movement cycle
-  movement_in_progress = false
-  
-  -- Stop all timers
-  if render_timer then
-    render_timer:stop()
-    render_timer = nil
-  end
-  
-  if encoder_timer then
-    encoder_timer:stop()
-    encoder_timer = nil
-  end
-  
-  -- Reset encoder states
-  for i = 1, 3 do
-    encoder_turning_cw[i] = false
-    encoder_turning_ccw[i] = false
-  end
-  
-  -- Future: stop audio engines, save state, etc.
+  -- Cleanup code here
 end
