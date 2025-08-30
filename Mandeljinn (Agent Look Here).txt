@@ -1,0 +1,32 @@
+Mandeljinn is a fractal music explorer inspired by Fractal Music Generator (FMG) by BetaZeta
+
+Goals:
+1. Implement generation, panning and zooming of the Mandelbrot Set and othe fractals supported by FMG.
+    a. Identify the fractals supported by FMG and the formulas used to generate them.
+    b. Implement each fractal supported by FMG in mandeljinn.
+
+2. Implement multiple control combinations using NORNS Key Buttons (K1, K2, K3) and Encoders (E1, E2, E3)
+    a. E1 - Zoom In-Out (CW/CCW)
+    b. E2 - Pan Left-Right (CW/CCW) (Direction Subject to Change)
+    C. E3 - Pan Up-Down (CW/CCW) (Direction Subject to Change)
+    d. K1+E1 - Scroll Select Fractal (HUD Activates and displays
+        current selection highlighted black text on white background.
+        Ohter selections above and below are white text on black background)
+    e. K2+E1 - Increase/Decrease (CW/CCW) Orbit Position Note Execution Tempo 
+    f. K2+E2 - Increase/Decrease (CW/CCW) Number of Orbit Positions to Play in Loop
+    g. K2+E3 - Increase/Decrease (CW/CCW)
+    h. K3+E1 - Increase/Decrease (CW/CCW)
+    i. K3+E2
+    j. K3+E3
+    k. K2+K3+E1
+    l. K2+K3+E2
+    m. K2+K3+E3
+    n. K1 Short Press-Release - Toggle between NORNS SELECT/SYSTEM/SLEEP Menu
+        Screen and Patch Canvas. Pause Playing while viewing menu.
+    o. K2 Short Press-Release - Add current Orbit Origin Point and its Parameters to Play Sequence List
+    p. K3 Short Press-Release - Delete most recently added Origin Origin Point Entry from Play Sequence List
+    q.
+    r.
+    s.
+    t.
+    u.

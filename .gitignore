@@ -1,0 +1,26 @@
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Backup files
+*.bak
+*.backup
+
+# Development files
+.vscode/
+*.code-workspace
+
+# Norns specific
+# (Add any norns-specific ignore patterns here)
