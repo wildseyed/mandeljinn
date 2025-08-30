@@ -62,10 +62,14 @@ local hud_text = ""
 local encoder_timer = nil
 local pending_render = false
 
--- Encoder state tracking (instead of event queuing)
-local encoder_states = {false, false, false}  -- Track if each encoder is currently being turned
-local encoder_directions = {0, 0, 0}          -- Track direction: -1, 0, +1
-local encoder_check_timer = nil
+-- Boolean encoder state tracking (digital, not analog)
+local encoder_turning_cw = {false, false, false}   -- Is encoder turning clockwise?
+local encoder_turning_ccw = {false, false, false}  -- Is encoder turning counter-clockwise?
+local encoder_idle_time = {0, 0, 0}                -- Time since last encoder activity
+local encoder_timeout = 0.1                        -- Consider encoder stopped after 100ms of no activity
+
+-- Movement processing state
+local movement_in_progress = false                  -- Are we in move->render->wait cycle?
 
 -- Background rendering state  
 local render_in_progress = false
@@ -299,16 +303,11 @@ function render_fractal()
     screen_dirty = true -- Final screen update
     print("IMMEDIATE RENDER: completed")
     
-    -- Restart encoder checking if any encoders are still active
-    local any_encoder_active = false
-    for i = 1, 3 do
-      if encoder_states[i] then
-        any_encoder_active = true
-        break
-      end
-    end
-    if any_encoder_active then
-      start_encoder_checking()
+    -- Resume movement cycle if it was in progress
+    if movement_in_progress then
+      movement_in_progress = false
+      print("MOVEMENT: render complete, checking for more movement")
+      start_movement_cycle()
     end
     
     return
@@ -382,16 +381,11 @@ function render_incremental(generation)
       render_timer = nil
     end
     
-    -- Restart encoder checking if any encoders are still active
-    local any_encoder_active = false
-    for i = 1, 3 do
-      if encoder_states[i] then
-        any_encoder_active = true
-        break
-      end
-    end
-    if any_encoder_active then
-      start_encoder_checking()
+    -- Resume movement cycle if it was in progress
+    if movement_in_progress then
+      movement_in_progress = false
+      print("MOVEMENT: render complete, checking for more movement")
+      start_movement_cycle()
     end
   end
 end
@@ -456,132 +450,138 @@ function schedule_render()
   encoder_timer:start()
 end
 
--- Encoder state tracking - no event queuing, just track current direction
+-- Encoder boolean state tracking - digital not analog
 function enc(n, delta)
-  -- Update encoder state and direction
-  encoder_states[n] = true
-  encoder_directions[n] = delta > 0 and 1 or -1
+  local current_time = util.time()
   
-  print("ENC STATE: n=" .. n .. " direction=" .. encoder_directions[n])
+  -- Update boolean direction state based on delta (ignore magnitude)
+  if delta > 0 then
+    encoder_turning_cw[n] = true
+    encoder_turning_ccw[n] = false
+  else
+    encoder_turning_cw[n] = false
+    encoder_turning_ccw[n] = true
+  end
   
-  -- Start encoder checking if not already running
-  if encoder_check_timer == nil and not render_in_progress then
-    start_encoder_checking()
+  encoder_idle_time[n] = current_time
+  
+  -- Start movement processing if not already in progress
+  if not movement_in_progress and not render_in_progress then
+    start_movement_cycle()
   end
 end
 
--- Continuous encoder checking - move one pixel, render, wait, repeat
-function check_encoder_states()
-  -- Don't process if render is in progress
-  if render_in_progress then
-    return
+-- Process one movement cycle: move -> render -> wait -> check again
+function start_movement_cycle()
+  if movement_in_progress or render_in_progress then
+    return  -- Already processing
   end
   
-  -- Check if any encoders are active
-  local any_active = false
+  movement_in_progress = true
+  process_one_movement()
+end
+
+function process_one_movement()
+  local current_time = util.time()
+  local moved = false
+  
+  -- Check for encoder timeouts (consider stopped if no activity for timeout period)
   for i = 1, 3 do
-    if encoder_states[i] then
-      any_active = true
+    if current_time - encoder_idle_time[i] > encoder_timeout then
+      encoder_turning_cw[i] = false
+      encoder_turning_ccw[i] = false
+    end
+  end
+  
+  -- Check if any encoder is currently turning
+  local any_encoder_active = false
+  for i = 1, 3 do
+    if encoder_turning_cw[i] or encoder_turning_ccw[i] then
+      any_encoder_active = true
       break
     end
   end
   
-  -- If no encoders active, stop checking
-  if not any_active then
-    stop_encoder_checking()
+  -- If no encoders active, stop movement cycle
+  if not any_encoder_active then
+    movement_in_progress = false
+    print("MOVEMENT: stopped - no active encoders")
     return
   end
   
-  -- Process active encoders - move by one pixel equivalent
-  local moved = false
-  
-  if fractal_select_mode and encoder_states[1] then
-    -- Fractal selection
-    fractal_index = util.clamp(fractal_index + encoder_directions[1], 1, #fractals)
+  -- Process encoder 1 (zoom or special modes)
+  if fractal_select_mode and (encoder_turning_cw[1] or encoder_turning_ccw[1]) then
+    local direction = encoder_turning_cw[1] and 1 or -1
+    fractal_index = util.clamp(fractal_index + direction, 1, #fractals)
     render_needed = true
     print("FRACTAL CHANGE: " .. fractals[fractal_index].name)
     show_hud("FRACTAL: " .. fractals[fractal_index].name)
     moved = true
     
-  elseif iteration_select_mode and encoder_states[1] then
-    -- Iteration count adjustment
-    local iteration_step = encoder_directions[1] * 10
+  elseif iteration_select_mode and (encoder_turning_cw[1] or encoder_turning_ccw[1]) then
+    local direction = encoder_turning_cw[1] and 1 or -1
+    local iteration_step = direction * 10
     max_iterations = util.clamp(max_iterations + iteration_step, 10, 500)
     render_needed = true
     print("ITERATION CHANGE: " .. max_iterations)
     show_hud("ITERATIONS: " .. max_iterations)
     moved = true
     
-  else
-    -- Normal navigation
-    if encoder_states[1] then
-      -- Zoom - small step per check
-      local zoom_step = 1.02  -- Very small zoom step
-      if encoder_directions[1] > 0 then
-        zoom = zoom * zoom_step
-      else
-        zoom = zoom / zoom_step
-      end
-      zoom = util.clamp(zoom, MIN_ZOOM, MAX_ZOOM)
-      print("ZOOM: " .. zoom)
-      show_hud(string.format("ZOOM: %.2fx", zoom))
-      moved = true
+  elseif encoder_turning_cw[1] or encoder_turning_ccw[1] then
+    -- Zoom - one increment per cycle
+    local zoom_step = 1.02  -- 2% zoom step
+    if encoder_turning_cw[1] then
+      zoom = zoom * zoom_step
+    else
+      zoom = zoom / zoom_step
     end
-    
-    if encoder_states[2] then
-      -- Pan X - one pixel equivalent
-      local pixel_step = 1.0 / zoom  -- One pixel at current zoom
-      center_x = center_x + (-encoder_directions[2]) * pixel_step  -- Reversed direction
-      center_x = util.clamp(center_x, -MAX_PAN_X, MAX_PAN_X)
-      print("PAN X: " .. center_x)
-      show_hud(string.format("PAN X: %.3f", center_x))
-      moved = true
-    end
-    
-    if encoder_states[3] then
-      -- Pan Y - one pixel equivalent
-      local pixel_step = 1.0 / zoom  -- One pixel at current zoom
-      center_y = center_y + encoder_directions[3] * pixel_step
-      center_y = util.clamp(center_y, -MAX_PAN_Y, MAX_PAN_Y)
-      print("PAN Y: " .. center_y)
-      show_hud(string.format("PAN Y: %.3f", center_y))
-      moved = true
-    end
+    zoom = util.clamp(zoom, MIN_ZOOM, MAX_ZOOM)
+    print("ZOOM: " .. zoom .. " (one increment)")
+    show_hud(string.format("ZOOM: %.2fx", zoom))
+    moved = true
   end
   
-  -- If we moved, start render and stop checking until render completes
+  -- Process encoder 2 (pan X)
+  if encoder_turning_cw[2] or encoder_turning_ccw[2] then
+    local direction = encoder_turning_cw[2] and 1 or -1
+    local pixel_step = 1.0 / zoom  -- Exactly one pixel at current zoom
+    center_x = center_x + (-direction) * pixel_step  -- Reversed direction
+    center_x = util.clamp(center_x, -MAX_PAN_X, MAX_PAN_X)
+    print("PAN X: " .. center_x .. " (one pixel)")
+    show_hud(string.format("PAN X: %.3f", center_x))
+    moved = true
+  end
+  
+  -- Process encoder 3 (pan Y)
+  if encoder_turning_cw[3] or encoder_turning_ccw[3] then
+    local direction = encoder_turning_cw[3] and 1 or -1
+    local pixel_step = 1.0 / zoom  -- Exactly one pixel at current zoom
+    center_y = center_y + direction * pixel_step
+    center_y = util.clamp(center_y, -MAX_PAN_Y, MAX_PAN_Y)
+    print("PAN Y: " .. center_y .. " (one pixel)")
+    show_hud(string.format("PAN Y: %.3f", center_y))
+    moved = true
+  end
+  
+  -- If we moved, start render and WAIT for completion
   if moved then
+    print("MOVEMENT: moved, starting render and waiting...")
     schedule_render()
     screen_dirty = true
-    stop_encoder_checking()  -- Will restart when render completes
-  end
-  
-  -- Clear encoder states after processing
-  for i = 1, 3 do
-    encoder_states[i] = false
-  end
-end
-
-function start_encoder_checking()
-  if encoder_check_timer then return end
-  
-  encoder_check_timer = metro.init()
-  if encoder_check_timer == nil then
-    print("ERROR: encoder_check_timer metro.init() failed")
-    return
-  end
-  
-  encoder_check_timer.time = 0.05  -- Check every 50ms
-  encoder_check_timer.event = check_encoder_states
-  encoder_check_timer:start()
-  print("ENCODER CHECKING: started")
-end
-
-function stop_encoder_checking()
-  if encoder_check_timer then
-    encoder_check_timer:stop()
-    encoder_check_timer = nil
-    print("ENCODER CHECKING: stopped")
+    -- movement_in_progress stays true - will be cleared when render completes
+  else
+    -- No movement needed, continue cycle
+    movement_in_progress = false
+    -- Check again after a short delay
+    local continue_timer = metro.init()
+    if continue_timer then
+      continue_timer.time = 0.05  -- 50ms delay
+      continue_timer.event = function()
+        continue_timer:stop()
+        start_movement_cycle()
+      end
+      continue_timer:start()
+    end
   end
 end
 
@@ -705,9 +705,10 @@ end
 
 -- Cleanup
 function cleanup()
-  -- Stop all timers
-  stop_encoder_checking()
+  -- Stop movement cycle
+  movement_in_progress = false
   
+  -- Stop all timers
   if render_timer then
     render_timer:stop()
     render_timer = nil
@@ -716,6 +717,12 @@ function cleanup()
   if encoder_timer then
     encoder_timer:stop()
     encoder_timer = nil
+  end
+  
+  -- Reset encoder states
+  for i = 1, 3 do
+    encoder_turning_cw[i] = false
+    encoder_turning_ccw[i] = false
   end
   
   -- Future: stop audio engines, save state, etc.
