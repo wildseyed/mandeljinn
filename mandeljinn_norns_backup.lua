@@ -666,11 +666,9 @@ function key(n, z)
     elseif n == 2 then
       k2_press_time = now
       k2_still_down = true
-      redraw()  -- Update HUD immediately
     elseif n == 3 then
       k3_press_time = now
       k3_still_down = true
-      redraw()  -- Update HUD immediately
     end
   else  -- Key release
     if n == 2 then
@@ -769,6 +767,17 @@ function redraw()
   -- Draw context-aware HUD
   draw_context_hud()
   
+  -- Status line
+  screen.level(4)
+  screen.move(2, SCREEN_H - 2)
+  local progress = ""
+  if render_in_progress then
+    local pct = math.floor((render_row-1)/SCREEN_H*100)
+    progress = string.format(" R%02d%%", pct)
+  end
+  screen.text(string.format("%s | %.1fx%s", 
+    fractals[fractal_index].short, zoom, progress))
+  
   screen.update()
   screen_dirty = false
 end
@@ -815,18 +824,10 @@ function draw_context_hud()
     screen.text("LOOP PAL")
     
   else
-    -- Normal State: ADD DEL | MNU ZOOM | PNH PNV
+    -- Normal State: ADD DEL
     screen.level(10)
     screen.move(2, 56)
     screen.text("ADD DEL")
-    
-    screen.level(10)
-    screen.move(90, 8)
-    screen.text("MNU ZOOM")
-    
-    screen.level(10)
-    screen.move(90, 56)
-    screen.text("PNH PNV")
   end
 end
 

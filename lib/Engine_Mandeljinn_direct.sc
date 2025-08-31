@@ -44,7 +44,7 @@ Engine_Mandeljinn : CroneEngine {
       
       if (~audio_mode == 0) {
         // Start direct mode
-        ~direct_synth = Synth(\mandeljinn_direct, [\ampL, 0.1, \ampR, 0.1], ~mandeljinn_group);
+        ~direct_synth = Synth(\mandeljinn_direct, [\ampL, 0, \ampR, 0], ~mandeljinn_group);
         ~audio_enabled = true;
         "Direct mode synth started".postln;
       };
