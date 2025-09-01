@@ -41,6 +41,15 @@ Mandeljinn bridges mathematics and music by generating melodic sequences from fr
 - **K3 Hold + E2**: Toggle display mode (FILL/DIRECT)
 - **K3 Hold + E3**: Change color palette
 
+### Sequence Management
+- **K2 Long Press**: Open hierarchical sequence menu with full-screen interface
+- **K3 Long Press**: Toggle auto-playback through stored sequence locations
+- **Menu Navigation**: E1 scrolls, K3 selects, K2 goes back
+- **View Sequences**: Browse stored orbits with fractal details and coordinates
+- **Orbit Operations**: Copy, insert, and delete specific sequence locations
+- **Auto-Playback**: Timer-based cycling through sequences with visual feedback
+- **Save/Load Lists**: File I/O pending text entry method implementation
+
 ### Audio Engine
 - **PolyPerc Integration**: Built-in polyphonic percussion synthesizer
 - **Dynamic Note Generation**: MIDI notes converted to frequencies with velocity/pan
@@ -82,7 +91,17 @@ Mandeljinn bridges mathematics and music by generating melodic sequences from fr
 
 ## Version History
 
-### v1.1 (Current) - FILL Mode & Normalized Musical Mapping
+### v1.3 (Current) - Hierarchical Sequence Management & Project Cleanup
+- **Hierarchical Menu System**: Full-screen sequence management interface replacing fractal display
+- **Sequence Browser**: View stored orbits with fractal type, coordinates, and zoom details
+- **Auto-Playback System**: K3 long press toggles timer-based cycling through sequences
+- **Menu Navigation**: E1 scrolls, K3 selects, K2 navigates back through menu levels  
+- **Orbit Operations**: Copy, insert, and delete specific sequence locations via sub-menus
+- **Simplified Controls**: K2 long = menu, K3 long = auto-play (removed complex combinations)
+- **Project Cleanup**: Moved 21 development files to archive, clean essential-only structure
+- **Pending Features**: Save/Load sequence lists awaiting text entry method implementation
+
+### v1.2 - FILL Mode & Normalized Musical Mapping
 - **FILL Mode Implementation**: Orbit display normalized to screen bounds for maximum melodic range
 - **Unified Coordinate System**: Visual and musical mapping use same coordinate conversion
 - **Display Mode Toggle**: K3+E2 switches between FILL (default) and DIRECT modes
