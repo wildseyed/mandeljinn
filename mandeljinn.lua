@@ -46,9 +46,8 @@
 -- K3 Hold + E3: Change color palette
 --
 -- SEQUENCE MANAGEMENT:
--- K2 Long + K3 Short: Play/Pause auto-playback
--- K3 Long + K2 Short: Open sequence menu
--- K2 Long + K3 Long: Reset view to origin
+-- K2 Long Press: Open sequence menu
+-- K3 Long Press: Play/Pause auto-playback
 --
 -- github.com/wildseyed/mandeljinn
 
@@ -125,10 +124,6 @@ local k2_still_down = false
 local k3_still_down = false
 local HOLD_THRESHOLD = 0.5
 
--- Key combination state tracking  
-local k2_was_held_when_k3_released = false
-local k3_was_held_when_k2_released = false
-
 -- Sequence management
 local sequence_list = {}
 local global_tempo = 120
@@ -140,10 +135,18 @@ local auto_play_timer = nil
 local current_sequence_index = 1
 local auto_play_interval = 4.0  -- seconds per location
 
--- Sequence management menu
+-- Sequence management menu system
 local menu_active = false
+local menu_state = "main"  -- "main", "view", "save", "load", "orbit_actions"
 local menu_index = 1
-local menu_items = {"Browse", "Load", "Save", "Copy", "Insert", "Delete", "Clear", "Exit"}
+local selected_orbit_index = 1
+
+-- Menu definitions
+local main_menu_items = {"View Sequence List", "Save Sequence List", "Load Sequence List"}
+local orbit_action_items = {"Copy", "Insert", "Delete", "Back"}
+
+-- File I/O (placeholder for norns file system)
+local saved_sequences = {}  -- Will store saved sequence files
 
 -- Palette system
 local palette_index = 1
@@ -617,65 +620,117 @@ end
 -- Sequence management menu functions
 function open_sequence_menu()
   menu_active = true
+  menu_state = "main"
   menu_index = 1
-  show_hud("SEQUENCE MENU: " .. menu_items[menu_index])
-  print("DEBUG: Sequence menu opened")
+  print("DEBUG: Sequence menu opened - main menu")
 end
 
 function close_sequence_menu()
   menu_active = false
-  show_hud("MENU CLOSED")
+  menu_state = "main"
+  menu_index = 1
   print("DEBUG: Sequence menu closed")
 end
 
-function handle_menu_action()
-  local action = menu_items[menu_index]
-  
-  if action == "Browse" then
-    if #sequence_list == 0 then
-      show_hud("NO SEQUENCES TO BROWSE")
-    else
-      show_hud("BROWSE: " .. #sequence_list .. " LOCATIONS")
-      -- Could implement a browse mode here
+function handle_menu_navigation(direction)
+  if menu_state == "main" then
+    menu_index = menu_index + direction
+    if menu_index > #main_menu_items then
+      menu_index = 1
+    elseif menu_index < 1 then
+      menu_index = #main_menu_items
     end
     
-  elseif action == "Load" then
-    show_hud("LOAD: NOT IMPLEMENTED")
-    -- TODO: File loading
-    
-  elseif action == "Save" then
-    show_hud("SAVE: NOT IMPLEMENTED") 
-    -- TODO: File saving
-    
-  elseif action == "Copy" then
+  elseif menu_state == "view" then
     if #sequence_list > 0 then
-      show_hud("COPIED " .. #sequence_list .. " LOCATIONS")
-      -- TODO: Clipboard functionality
-    else
-      show_hud("NO SEQUENCES TO COPY")
+      menu_index = menu_index + direction
+      if menu_index > #sequence_list then
+        menu_index = 1
+      elseif menu_index < 1 then
+        menu_index = #sequence_list
+      end
     end
     
-  elseif action == "Insert" then
-    local count = add_current_state_to_sequence()
-    show_hud("INSERTED LOCATION (" .. count .. ")")
-    
-  elseif action == "Delete" then
-    if delete_last_sequence_entry() then
-      show_hud("DELETED LOCATION (" .. #sequence_list .. ")")
-    else
-      show_hud("NO LOCATIONS TO DELETE")
+  elseif menu_state == "orbit_actions" then
+    menu_index = menu_index + direction
+    if menu_index > #orbit_action_items then
+      menu_index = 1
+    elseif menu_index < 1 then
+      menu_index = #orbit_action_items
     end
-    
-  elseif action == "Clear" then
-    sequence_list = {}
-    show_hud("ALL SEQUENCES CLEARED")
-    
-  elseif action == "Exit" then
-    close_sequence_menu()
-    return
   end
-  
-  print("DEBUG: Menu action executed: " .. action)
+end
+
+function handle_menu_select()
+  if menu_state == "main" then
+    local selected = main_menu_items[menu_index]
+    
+    if selected == "View Sequence List" then
+      menu_state = "view"
+      menu_index = 1
+      
+    elseif selected == "Save Sequence List" then
+      menu_state = "save"
+      menu_index = 1
+      
+    elseif selected == "Load Sequence List" then
+      menu_state = "load"
+      menu_index = 1
+    end
+    
+  elseif menu_state == "view" then
+    if #sequence_list > 0 then
+      -- Enter orbit actions submenu
+      selected_orbit_index = menu_index
+      menu_state = "orbit_actions"
+      menu_index = 1
+    end
+    
+  elseif menu_state == "orbit_actions" then
+    local action = orbit_action_items[menu_index]
+    
+    if action == "Copy" then
+      -- TODO: Copy orbit to clipboard
+      print("DEBUG: Copy orbit " .. selected_orbit_index)
+      
+    elseif action == "Insert" then
+      -- Add current location to sequence
+      local count = add_current_state_to_sequence()
+      print("DEBUG: Inserted new orbit (" .. count .. " total)")
+      
+    elseif action == "Delete" then
+      if selected_orbit_index <= #sequence_list then
+        table.remove(sequence_list, selected_orbit_index)
+        print("DEBUG: Deleted orbit " .. selected_orbit_index)
+        -- Adjust menu index if needed
+        if menu_index > #sequence_list and #sequence_list > 0 then
+          menu_index = #sequence_list
+        end
+        -- Return to view menu
+        menu_state = "view"
+        menu_index = math.min(selected_orbit_index, #sequence_list)
+        if menu_index < 1 then menu_index = 1 end
+      end
+      
+    elseif action == "Back" then
+      menu_state = "view"
+      menu_index = selected_orbit_index
+    end
+  end
+end
+
+function handle_menu_back()
+  if menu_state == "main" then
+    close_sequence_menu()
+    
+  elseif menu_state == "view" or menu_state == "save" or menu_state == "load" then
+    menu_state = "main"
+    menu_index = 1
+    
+  elseif menu_state == "orbit_actions" then
+    menu_state = "view"
+    menu_index = selected_orbit_index
+  end
 end
 
 -- Apply pending orbit changes when current sequence completes
@@ -1033,14 +1088,8 @@ function sample_and_process_encoders()
   if menu_active then
     if e1_delta ~= 0 then
       -- E1: Navigate menu items
-      menu_index = menu_index + (e1_delta > 0 and 1 or -1)
-      if menu_index > #menu_items then
-        menu_index = 1
-      elseif menu_index < 1 then
-        menu_index = #menu_items
-      end
-      show_hud("MENU: " .. menu_items[menu_index])
-      print("DEBUG: Menu navigation - index " .. menu_index .. " (" .. menu_items[menu_index] .. ")")
+      handle_menu_navigation(e1_delta > 0 and 1 or -1)
+      print("DEBUG: Menu navigation - state: " .. menu_state .. " index: " .. menu_index)
     end
     return -- Don't process other encoders in menu mode
   end
@@ -1367,28 +1416,15 @@ function key(n, z)
       local hold_duration = now - k2_press_time
       print("DEBUG: K2 hold duration: " .. string.format("%.3f", hold_duration) .. "s (threshold: " .. HOLD_THRESHOLD .. "s)")
       
-      local k2_was_held = hold_duration >= HOLD_THRESHOLD
-      local k3_currently_held = k3_still_down and (now - k3_press_time) >= HOLD_THRESHOLD
-      local k3_currently_short = k3_still_down and (now - k3_press_time) < HOLD_THRESHOLD
-      
-      if k2_was_held and k3_currently_held then
-        -- K2 Long + K3 Long = Reset (will be handled when both are long)
-        print("DEBUG: K2 long + K3 long detected - will reset when K3 released")
-      elseif k2_was_held and not k3_still_down then
-        -- K2 was held, K3 already released - check if K3 was short
-        if k3_was_held_when_k2_released then
-          print("DEBUG: K2 long + K3 short = toggle auto-playback")
-          if auto_playing then
-            stop_auto_playback()
-          else
-            start_auto_playback()
-          end
-        end
-      elseif not k2_was_held then
+      if hold_duration >= HOLD_THRESHOLD then
+        -- K2 Long Press = Open sequence menu
+        print("DEBUG: K2 long press = sequence menu")
+        open_sequence_menu()
+      else
         -- K2 short press
         if menu_active then
-          -- K2 short in menu = execute menu action
-          handle_menu_action()
+          -- K2 short in menu = back
+          handle_menu_back()
         else
           -- K2 short press: Add current state to saved sequence list
           print("DEBUG: K2 short press - adding current state to sequence list")
@@ -1397,68 +1433,35 @@ function key(n, z)
         end
       end
       
-      -- Store K2 hold state for K3's use
-      k2_was_held_when_k3_released = k2_was_held
-      
     elseif n == 3 then
       print("DEBUG: K3 released")
       k3_still_down = false
       local hold_duration = now - k3_press_time
       print("DEBUG: K3 hold duration: " .. string.format("%.3f", hold_duration) .. "s (threshold: " .. HOLD_THRESHOLD .. "s)")
       
-      local k3_was_held = hold_duration >= HOLD_THRESHOLD
-      local k2_currently_held = k2_still_down and (now - k2_press_time) >= HOLD_THRESHOLD
-      
-      if k3_was_held and k2_currently_held then
-        -- K3 Long + K2 Long = Reset 
-        print("DEBUG: K3 long + K2 long = reset")
-        center_x = -0.5
-        center_y = 0.0
-        zoom = 1.0
-        show_hud("VIEW RESET")
-        render_needed = true
-      elseif k3_was_held and not k2_still_down then
-        -- K3 was held, K2 already released - check if K2 was short
-        if not k2_was_held_when_k3_released then
-          print("DEBUG: K3 long + K2 short = sequence menu")
-          open_sequence_menu()
-        end
-      elseif not k3_was_held then
-        -- K3 short press
-        if k2_still_down and (now - k2_press_time) >= HOLD_THRESHOLD then
-          -- K3 short + K2 currently held = auto-playback
-          print("DEBUG: K3 short + K2 long = toggle auto-playback")
-          if auto_playing then
-            stop_auto_playback()
-          else
-            start_auto_playback()
-          end
-        elseif not k2_still_down and k2_was_held_when_k3_released then
-          -- K3 short + K2 was held (already released) = auto-playback
-          print("DEBUG: K3 short + K2 was long = toggle auto-playback")
-          if auto_playing then
-            stop_auto_playback()
-          else
-            start_auto_playback()
-          end
+      if hold_duration >= HOLD_THRESHOLD then
+        -- K3 Long Press = Toggle auto-playback
+        print("DEBUG: K3 long press = toggle auto-playback")
+        if auto_playing then
+          stop_auto_playback()
         else
-          -- Normal K3 short press
-          if menu_active then
-            close_sequence_menu()
+          start_auto_playback()
+        end
+      else
+        -- K3 short press
+        if menu_active then
+          -- K3 short in menu = select/enter
+          handle_menu_select()
+        else
+          -- K3 short press: Delete from sequence
+          print("DEBUG: K3 short press - deleting from sequence")
+          if delete_last_sequence_entry() then
+            show_hud("DELETED FROM SEQUENCE (" .. #sequence_list .. ")")
           else
-            -- K3 short press: Delete from sequence
-            print("DEBUG: K3 short press - deleting from sequence")
-            if delete_last_sequence_entry() then
-              show_hud("DELETED FROM SEQUENCE (" .. #sequence_list .. ")")
-            else
-              show_hud("SEQUENCE EMPTY")
-            end
+            show_hud("SEQUENCE EMPTY")
           end
         end
       end
-      
-      -- Store K3 hold state for K2's use  
-      k3_was_held_when_k2_released = k3_was_held
     end
   end
   
@@ -1470,28 +1473,157 @@ end
 function redraw()
   screen.clear()
   
-  -- Draw fractal
-  for y = 1, SCREEN_H do
-    for x = 1, SCREEN_W do
-      local level = pixel_buffer[y][x]
-      if level > 0 then
-        screen.level(level)
-        screen.rect(x-1, y-1, 1, 1)
-        screen.fill()
+  if menu_active then
+    -- Draw menu interface (no fractal)
+    draw_menu_interface()
+  else
+    -- Draw fractal
+    for y = 1, SCREEN_H do
+      for x = 1, SCREEN_W do
+        local level = pixel_buffer[y][x]
+        if level > 0 then
+          screen.level(level)
+          screen.rect(x-1, y-1, 1, 1)
+          screen.fill()
+        end
       end
     end
+    
+    -- Draw orbit visualization with musical playback
+    if show_orbit and #orbit_points > 0 then
+      draw_orbit_with_playback()
+    end
+    
+    -- Draw context-aware HUD
+    draw_context_hud()
   end
-  
-  -- Draw orbit visualization with musical playback
-  if show_orbit and #orbit_points > 0 then
-    draw_orbit_with_playback()
-  end
-  
-  -- Draw context-aware HUD
-  draw_context_hud()
   
   screen.update()
   screen_dirty = false
+end
+
+-- Draw menu interface (full screen, no fractal)
+function draw_menu_interface()
+  screen.level(15)
+  
+  if menu_state == "main" then
+    -- Main menu
+    screen.move(10, 10)
+    screen.text("SEQUENCE MANAGER")
+    
+    for i, item in ipairs(main_menu_items) do
+      local y = 25 + (i-1) * 12
+      if i == menu_index then
+        -- Highlight selected item
+        screen.level(15)
+        screen.rect(5, y-8, 118, 10)
+        screen.fill()
+        screen.level(0)
+      else
+        screen.level(10)
+      end
+      screen.move(10, y)
+      screen.text(item)
+    end
+    
+    -- Controls
+    screen.level(8)
+    screen.move(10, 58)
+    screen.text("E1:Select K3:Enter K2:Back")
+    
+  elseif menu_state == "view" then
+    -- View sequence list
+    screen.move(10, 10)
+    screen.text("STORED ORBITS (" .. #sequence_list .. ")")
+    
+    if #sequence_list == 0 then
+      screen.level(8)
+      screen.move(10, 30)
+      screen.text("No orbits stored")
+    else
+      local start_idx = math.max(1, menu_index - 4)
+      local end_idx = math.min(#sequence_list, start_idx + 4)
+      
+      for i = start_idx, end_idx do
+        local y = 20 + (i - start_idx) * 8
+        local orbit = sequence_list[i]
+        
+        if i == menu_index then
+          -- Highlight selected orbit
+          screen.level(15)
+          screen.rect(5, y-6, 118, 8)
+          screen.fill()
+          screen.level(0)
+        else
+          screen.level(10)
+        end
+        
+        screen.move(10, y)
+        local fractal_name = fractals[orbit.fractal_index].name
+        local pos_text = string.format("%.2f,%.2f", orbit.center_x, orbit.center_y)
+        screen.text(string.format("%d. %s %s z%.1f", i, fractal_name, pos_text, orbit.zoom))
+      end
+    end
+    
+    -- Controls
+    screen.level(8)
+    screen.move(10, 58)
+    if #sequence_list > 0 then
+      screen.text("E1:Browse K3:Actions K2:Back")
+    else
+      screen.text("K2:Back")
+    end
+    
+  elseif menu_state == "orbit_actions" then
+    -- Orbit actions submenu
+    screen.move(10, 10)
+    screen.text("ORBIT " .. selected_orbit_index .. " ACTIONS")
+    
+    for i, action in ipairs(orbit_action_items) do
+      local y = 25 + (i-1) * 10
+      if i == menu_index then
+        screen.level(15)
+        screen.rect(5, y-7, 118, 9)
+        screen.fill()
+        screen.level(0)
+      else
+        screen.level(10)
+      end
+      screen.move(10, y)
+      screen.text(action)
+    end
+    
+    -- Controls
+    screen.level(8)
+    screen.move(10, 58)
+    screen.text("E1:Select K3:Execute K2:Back")
+    
+  elseif menu_state == "save" then
+    -- Save sequence (placeholder)
+    screen.move(10, 10)
+    screen.text("SAVE SEQUENCE")
+    screen.move(10, 30)
+    screen.level(8)
+    screen.text("Text input not implemented")
+    screen.move(10, 40)
+    screen.text("(Need norns textentry)")
+    
+    screen.level(8)
+    screen.move(10, 58)
+    screen.text("K2:Back")
+    
+  elseif menu_state == "load" then
+    -- Load sequence (placeholder)
+    screen.move(10, 10)
+    screen.text("LOAD SEQUENCE")
+    screen.move(10, 30)
+    screen.level(8)
+    screen.text("No saved sequences")
+    
+    screen.level(8)
+    screen.move(10, 58)
+    screen.text("K2:Back")
+  end
 end
 
 -- Draw context-aware HUD with spatial mapping
@@ -1550,14 +1682,14 @@ function draw_context_hud()
     draw_text_with_bg(90, 8, "SH1 SCAL", 10)
     
   elseif k2_held then
-    -- K2 Hold State: PLAY RST | --- FRAC | LOOP ITER
-    draw_text_with_bg(2, 64, "PLAY RST", 12)
+    -- K2 Hold State: MENU --- | --- FRAC | LOOP ITER
+    draw_text_with_bg(2, 64, "MENU ---", 12)
     draw_text_with_bg(90, 8, "--- FRAC", 10)
     draw_text_with_bg(90, 64, "LOOP ITER", 10)
     
   elseif k3_held then
-    -- K3 Hold State: RST MENU | MNU TMPO | MODE PAL
-    draw_text_with_bg(2, 64, "RST MENU", 12)
+    -- K3 Hold State: PLAY --- | MNU TMPO | MODE PAL
+    draw_text_with_bg(2, 64, "PLAY ---", 12)
     draw_text_with_bg(90, 8, "MNU TMPO", 10)
     draw_text_with_bg(90, 64, "MODE PAL", 10)
     
