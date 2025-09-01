@@ -310,12 +310,14 @@ end
 
 -- Show HUD message (no timeout - stays until next parameter change)
 function show_hud(text)
+  print("DEBUG: show_hud() called with text: '" .. text .. "'")
   hud_text = text
   screen_dirty = true
 end
 
 -- Sequence management functions
 function add_current_state_to_sequence()
+  print("DEBUG: add_current_state_to_sequence() called")
   local state = {
     fractal_index = fractal_index,
     center_x = center_x,
@@ -326,14 +328,18 @@ function add_current_state_to_sequence()
     timestamp = util.time()
   }
   table.insert(sequence_list, state)
+  print("DEBUG: Added state to sequence, total count: " .. #sequence_list)
   return #sequence_list
 end
 
 function delete_last_sequence_entry()
+  print("DEBUG: delete_last_sequence_entry() called, current count: " .. #sequence_list)
   if #sequence_list > 0 then
     table.remove(sequence_list, #sequence_list)
+    print("DEBUG: Deleted from sequence, new count: " .. #sequence_list)
     return true
   end
+  print("DEBUG: Sequence was empty, nothing to delete")
   return false
 end
 
@@ -635,6 +641,23 @@ function init()
       step_render()
     end
     
+    -- Check for hold state changes and force redraw when they occur
+    local now = util.time()
+    local k2_held_now = k2_still_down and (now - k2_press_time) > HOLD_THRESHOLD
+    local k3_held_now = k3_still_down and (now - k3_press_time) > HOLD_THRESHOLD
+    
+    -- Initialize previous states if not set
+    if k2_held_prev == nil then k2_held_prev = false end
+    if k3_held_prev == nil then k3_held_prev = false end
+    
+    -- If hold state changed, force screen update
+    if k2_held_now ~= k2_held_prev or k3_held_now ~= k3_held_prev then
+      print("DEBUG: Hold state changed - K2_held: " .. tostring(k2_held_prev) .. " -> " .. tostring(k2_held_now) .. ", K3_held: " .. tostring(k3_held_prev) .. " -> " .. tostring(k3_held_now))
+      screen_dirty = true
+      k2_held_prev = k2_held_now
+      k3_held_prev = k3_held_now
+    end
+    
     if screen_dirty and not system_busy then
       redraw()
       screen_dirty = false
@@ -659,27 +682,34 @@ end
 function key(n, z)
   local now = util.time()
   
+  -- Debug: Track all key events
+  print("KEY EVENT: K" .. n .. " " .. (z == 1 and "PRESS" or "RELEASE") .. " at time " .. string.format("%.3f", now))
+  
   if z == 1 then  -- Key press
     if n == 1 then
       -- K1: Toggle to norns menu (original spec)
+      print("DEBUG: K1 pressed - opening norns menu")
       norns.menu.init()
     elseif n == 2 then
+      print("DEBUG: K2 pressed - setting down state")
       k2_press_time = now
       k2_still_down = true
-      redraw()  -- Update HUD immediately
     elseif n == 3 then
+      print("DEBUG: K3 pressed - setting down state")
       k3_press_time = now
       k3_still_down = true
-      redraw()  -- Update HUD immediately
     end
   else  -- Key release
     if n == 2 then
+      print("DEBUG: K2 released")
       k2_still_down = false
       local hold_duration = now - k2_press_time
+      print("DEBUG: K2 hold duration: " .. string.format("%.3f", hold_duration) .. "s (threshold: " .. HOLD_THRESHOLD .. "s)")
       
       -- Check if K3 is held (K2 becomes RST when K3 held)
       if k3_still_down and hold_duration >= HOLD_THRESHOLD then
         -- Reset view to origin
+        print("DEBUG: K2+K3 reset triggered")
         center_x = -0.5
         center_y = 0.0
         zoom = 1.0
@@ -687,17 +717,21 @@ function key(n, z)
         render_needed = true
       elseif hold_duration < HOLD_THRESHOLD then
         -- K2 short press: Add current state to sequence
+        print("DEBUG: K2 short press - adding to sequence")
         local count = add_current_state_to_sequence()
         show_hud("ADDED TO SEQUENCE (" .. count .. ")")
       end
       
     elseif n == 3 then
+      print("DEBUG: K3 released")
       k3_still_down = false
       local hold_duration = now - k3_press_time
+      print("DEBUG: K3 hold duration: " .. string.format("%.3f", hold_duration) .. "s (threshold: " .. HOLD_THRESHOLD .. "s)")
       
       -- Check if K2 is held (K3 becomes RST when K2 held)
       if k2_still_down and hold_duration >= HOLD_THRESHOLD then
         -- Reset view to origin
+        print("DEBUG: K3+K2 reset triggered")
         center_x = -0.5
         center_y = 0.0
         zoom = 1.0
@@ -705,6 +739,7 @@ function key(n, z)
         render_needed = true
       elseif hold_duration < HOLD_THRESHOLD then
         -- K3 short press: Delete from sequence
+        print("DEBUG: K3 short press - deleting from sequence")
         if delete_last_sequence_entry() then
           show_hud("DELETED FROM SEQUENCE (" .. #sequence_list .. ")")
         else
@@ -714,6 +749,7 @@ function key(n, z)
     end
   end
   
+  print("DEBUG: Calling redraw()")
   redraw()
 end
 
@@ -781,15 +817,31 @@ function draw_context_hud()
   local k2_held = k2_still_down and (now - k2_press_time) > HOLD_THRESHOLD
   local k3_held = k3_still_down and (now - k3_press_time) > HOLD_THRESHOLD
   
-  -- Top Left: Always show current pan/zoom values
+  -- Debug: Track HUD state
+  if k2_still_down or k3_still_down then
+    local k2_time = k2_still_down and (now - k2_press_time) or 0
+    local k3_time = k3_still_down and (now - k3_press_time) or 0
+    print("DEBUG HUD: K2_down=" .. tostring(k2_still_down) .. " (" .. string.format("%.3f", k2_time) .. "s) K3_down=" .. tostring(k3_still_down) .. " (" .. string.format("%.3f", k3_time) .. "s)")
+    print("DEBUG HUD: K2_held=" .. tostring(k2_held) .. " K3_held=" .. tostring(k3_held))
+  end
+  
+  print("DEBUG HUD: Current hud_text = '" .. hud_text .. "'")
+  
+  -- Top Left: Show HUD text if available, otherwise show coordinates
   screen.level(8)
   screen.move(2, 8)
-  screen.text(string.format("X:%.3f Y:%.3f", center_x, center_y))
+  if hud_text ~= "" then
+    screen.text(hud_text)
+    print("DEBUG HUD: Displaying hud_text: '" .. hud_text .. "'")
+  else
+    screen.text(string.format("X:%.3f Y:%.3f", center_x, center_y))
+    print("DEBUG HUD: Displaying coordinates")
+  end
   
   if k2_held then
     -- K2 Hold State: SH2 RST | MNU FRAC | --- ITER
     screen.level(12)
-    screen.move(2, 56)
+    screen.move(2, 64)
     screen.text("SH2 RST")
     
     screen.level(10)
@@ -797,13 +849,13 @@ function draw_context_hud()
     screen.text("MNU FRAC")
     
     screen.level(10)
-    screen.move(90, 56)
+    screen.move(90, 64)
     screen.text("--- ITER")
     
   elseif k3_held then
     -- K3 Hold State: RST SH3 | MNU TMPO | LOOP PAL
     screen.level(12)
-    screen.move(2, 56)
+    screen.move(2, 64)
     screen.text("RST SH3")
     
     screen.level(10)
@@ -811,13 +863,13 @@ function draw_context_hud()
     screen.text("MNU TMPO")
     
     screen.level(10)
-    screen.move(90, 56)
+    screen.move(90, 64)
     screen.text("LOOP PAL")
     
   else
     -- Normal State: ADD DEL | MNU ZOOM | PNH PNV
     screen.level(10)
-    screen.move(2, 56)
+    screen.move(2, 64)
     screen.text("ADD DEL")
     
     screen.level(10)
@@ -825,7 +877,7 @@ function draw_context_hud()
     screen.text("MNU ZOOM")
     
     screen.level(10)
-    screen.move(90, 56)
+    screen.move(90, 64)
     screen.text("PNH PNV")
   end
 end
