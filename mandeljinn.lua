@@ -99,6 +99,10 @@ local orbit_cx = 0
 local orbit_cy = 0
 local show_orbit = true
 
+-- FILL mode state
+local orbit_extents = nil
+local orbit_extents_dirty = true
+
 -- Encoder state tracking (paradigm implementation)
 local encoder_accumulated = {0, 0, 0}  -- Accumulated deltas since last sampling
 local last_encoder_sample_time = 0
@@ -157,6 +161,7 @@ local music_params = {
   progressive_draw = true,        -- Draw orbit points as they play
   wrap_display = true,            -- Wrap lines that go off-screen
   current_point = 0,              -- Currently playing point index
+  display_mode = "FILL",          -- "DIRECT" or "FILL" - how orbit is displayed
 }
 
 -- Musical scales for quantization
@@ -196,6 +201,51 @@ function complex_to_screen(zx, zy)
   local screen_x = ((zx - center_x) / (range * aspect) + 0.5) * SCREEN_W
   local screen_y = ((zy - center_y) / range + 0.5) * SCREEN_H
   return screen_x, screen_y
+end
+
+-- Normalize orbit points to fill the entire screen (FILL mode)
+function normalize_orbit_to_screen(zx, zy)
+  if #orbit_points == 0 then return zx, zy end
+  
+  -- Calculate orbit extents on first call or when orbit changes
+  if not orbit_extents or orbit_extents_dirty then
+    orbit_extents = calculate_orbit_extents()
+    orbit_extents_dirty = false
+  end
+  
+  -- Normalize to screen with padding
+  local padding = 10  -- pixels of padding from screen edges
+  local usable_width = SCREEN_W - 2 * padding
+  local usable_height = SCREEN_H - 2 * padding
+  
+  local norm_x = padding + (zx - orbit_extents.min_x) / (orbit_extents.max_x - orbit_extents.min_x) * usable_width
+  local norm_y = padding + (zy - orbit_extents.min_y) / (orbit_extents.max_y - orbit_extents.min_y) * usable_height
+  
+  return norm_x, norm_y
+end
+
+-- Calculate the extents (min/max) of the current orbit
+function calculate_orbit_extents()
+  if #orbit_points == 0 then 
+    return {min_x = 0, max_x = 1, min_y = 0, max_y = 1}
+  end
+  
+  local min_x, max_x = orbit_points[1][1], orbit_points[1][1]
+  local min_y, max_y = orbit_points[1][2], orbit_points[1][2]
+  
+  for i = 2, #orbit_points do
+    local zx, zy = orbit_points[i][1], orbit_points[i][2]
+    min_x = math.min(min_x, zx)
+    max_x = math.max(max_x, zx)
+    min_y = math.min(min_y, zy)
+    max_y = math.max(max_y, zy)
+  end
+  
+  -- Ensure we don't have zero ranges
+  if max_x == min_x then max_x = min_x + 0.001 end
+  if max_y == min_y then max_y = min_y + 0.001 end
+  
+  return {min_x = min_x, max_x = max_x, min_y = min_y, max_y = max_y}
 end
 
 -- Convert screen coordinates to musical parameters
@@ -244,8 +294,16 @@ function process_orbit_to_music(orbit_points)
   local sequence = {}
   local prev_screen_x, prev_screen_y
   
+  -- Choose coordinate conversion based on display mode
+  local coord_converter
+  if music_params.display_mode == "FILL" then
+    coord_converter = normalize_orbit_to_screen
+  else
+    coord_converter = complex_to_screen
+  end
+  
   for i, point in ipairs(orbit_points) do
-    local screen_x, screen_y = complex_to_screen(point[1], point[2])
+    local screen_x, screen_y = coord_converter(point[1], point[2])
     local music_data = screen_to_music(screen_x, screen_y, prev_screen_x, prev_screen_y)
     
     music_data.point_index = i
@@ -501,6 +559,7 @@ function calculate_and_send_orbit(cx, cy)
   
   -- Clear previous orbit points
   orbit_points = {}
+  orbit_extents_dirty = true  -- Mark for recalculation in FILL mode
   
   local zx, zy = cx, cy  -- FMG Convention: Z0 = C (not Z0 = 0!)
   
@@ -718,13 +777,21 @@ function draw_orbit_with_playback()
   screen.level(15)  -- Bright white for orbit
   screen.line_width(1)
   
+  -- Choose coordinate conversion based on display mode
+  local coord_converter
+  if music_params.display_mode == "FILL" then
+    coord_converter = normalize_orbit_to_screen
+  else
+    coord_converter = complex_to_screen
+  end
+  
   -- Draw all orbit lines (with wrapping support)
   for i = 1, #orbit_points - 1 do
     local zx1, zy1 = orbit_points[i][1], orbit_points[i][2]
     local zx2, zy2 = orbit_points[i+1][1], orbit_points[i+1][2]
     
-    local sx1, sy1 = complex_to_screen(zx1, zy1)
-    local sx2, sy2 = complex_to_screen(zx2, zy2)
+    local sx1, sy1 = coord_converter(zx1, zy1)
+    local sx2, sy2 = coord_converter(zx2, zy2)
     
     -- Draw line with wrapping
     draw_wrapped_line(sx1, sy1, sx2, sy2)
@@ -735,7 +802,7 @@ function draw_orbit_with_playback()
      music_params.current_point <= #orbit_points then
     local current_orbit_point = orbit_points[music_params.current_point]
     local zx, zy = current_orbit_point[1], current_orbit_point[2]
-    local sx, sy = complex_to_screen(zx, zy)
+    local sx, sy = coord_converter(zx, zy)
     
     -- Wrap screen coordinates
     sx = ((sx % SCREEN_W) + SCREEN_W) % SCREEN_W
@@ -753,7 +820,7 @@ function draw_orbit_with_playback()
   -- Draw starting point (Z0)
   if #orbit_points > 0 then
     local zx0, zy0 = orbit_points[1][1], orbit_points[1][2]
-    local sx0, sy0 = complex_to_screen(zx0, zy0)
+    local sx0, sy0 = coord_converter(zx0, zy0)
     sx0 = ((sx0 % SCREEN_W) + SCREEN_W) % SCREEN_W
     sy0 = ((sy0 % SCREEN_H) + SCREEN_H) % SCREEN_H
     
@@ -922,10 +989,24 @@ function sample_and_process_encoders()
       end
       action_taken = true
     elseif active_encoder == 2 then
-      -- K3 Hold + E2: Loop length control (RESPONSIVE - immediate)
-      music_params.loop_length = util.clamp(music_params.loop_length + dir, 1, 64)
-      show_hud("LOOP LENGTH: " .. music_params.loop_length)
-      action_taken = true
+      -- K3 Hold + E2: Display mode toggle (DELIBERATE - requires threshold)
+      palette_delta_accumulator = palette_delta_accumulator + delta  -- Reuse accumulator
+      
+      if math.abs(palette_delta_accumulator) >= DELIBERATE_THRESHOLD then
+        -- Toggle between DIRECT and FILL modes
+        if music_params.display_mode == "DIRECT" then
+          music_params.display_mode = "FILL"
+        else
+          music_params.display_mode = "DIRECT"
+        end
+        
+        show_hud("DISPLAY: " .. music_params.display_mode)
+        action_taken = true
+        palette_delta_accumulator = 0  -- Reset after action
+        
+        -- Regenerate visual if we have orbit points
+        screen_dirty = true
+      end
     elseif active_encoder == 3 then
       -- K3 Hold + E3: Palette cycling (DELIBERATE - requires threshold)
       palette_delta_accumulator = palette_delta_accumulator + delta
@@ -1242,10 +1323,10 @@ function draw_context_hud()
     draw_text_with_bg(90, 64, "LOOP ITER", 10)
     
   elseif k3_held then
-    -- K3 Hold State: RST SH3 | MNU TMPO | --- PAL
+    -- K3 Hold State: RST SH3 | MNU TMPO | MODE PAL
     draw_text_with_bg(2, 64, "RST SH3", 12)
     draw_text_with_bg(90, 8, "MNU TMPO", 10)
-    draw_text_with_bg(90, 64, "--- PAL", 10)
+    draw_text_with_bg(90, 64, "MODE PAL", 10)
     
   else
     -- Normal State: ADD DEL | MNU ZOOM | PNH PNV
